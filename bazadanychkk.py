@@ -1,66 +1,77 @@
 import streamlit as st
 from st_supabase_connection import SupabaseConnection
 
-st.set_page_config(page_title="Zarządzanie Asortymentem", layout="wide")
+st.set_page_config(page_title="Magazyn Supabase", layout="wide")
 
 # Inicjalizacja połączenia
 conn = st.connection("supabase", type=SupabaseConnection)
 
-st.title("📦 System Zarządzania Produktami")
+st.title("📊 Zarządzanie Bazą Danych (Supabase)")
+
+# Pobieranie danych do list wyboru
+def get_categories():
+    res = conn.table("kategorie").select("id, nazwa").execute()
+    return {c['nazwa']: c['id'] for c in res.data}
+
+categories_dict = get_categories()
 
 # --- SEKCJA KATEGORII ---
 st.header("📂 Kategorie")
-col1, col2 = st.columns(2)
+c_col1, c_col2 = st.columns(2)
 
-with col1:
-    st.subheader("Dodaj Kategorię")
-    new_cat = st.text_input("Nazwa nowej kategorii")
-    if st.button("Dodaj Kategorię"):
-        if new_cat:
-            conn.table("categories").insert({"name": new_cat}).execute()
-            st.success(f"Dodano kategorię: {new_cat}")
+with c_col1:
+    with st.expander("➕ Dodaj nową kategorię"):
+        c_nazwa = st.text_input("Nazwa kategorii")
+        c_opis = st.text_area("Opis kategorii")
+        if st.button("Zapisz kategorię"):
+            conn.table("kategorie").insert({"nazwa": c_nazwa, "opis": c_opis}).execute()
+            st.success("Dodano kategorię!")
             st.rerun()
 
-with col2:
-    st.subheader("Usuń Kategorię")
-    cats = conn.table("categories").select("id, name").execute()
-    cat_options = {c['name']: c['id'] for c in cats.data}
-    
-    cat_to_delete = st.selectbox("Wybierz kategorię do usunięcia", options=list(cat_options.keys()))
-    if st.button("Usuń Kategorię", type="primary"):
-        conn.table("categories").delete().eq("id", cat_options[cat_to_delete]).execute()
-        st.warning(f"Usunięto kategorię i powiązane produkty")
-        st.rerun()
+with c_col2:
+    with st.expander("🗑️ Usuń kategorię"):
+        if categories_dict:
+            cat_to_del = st.selectbox("Wybierz kategorię", list(categories_dict.keys()), key="del_cat")
+            if st.button("Usuń kategorię i jej produkty", type="primary"):
+                conn.table("kategorie").delete().eq("id", categories_dict[cat_to_del]).execute()
+                st.warning("Usunięto pomyślnie!")
+                st.rerun()
 
 st.divider()
 
 # --- SEKCJA PRODUKTÓW ---
 st.header("🛒 Produkty")
-p_col1, p_col2 = st.columns(2)
+p_col1, p_col2 = st.columns([1, 2])
 
 with p_col1:
     st.subheader("Dodaj Produkt")
-    p_name = st.text_input("Nazwa produktu")
-    p_price = st.number_input("Cena", min_value=0.0, step=0.01)
-    p_cat = st.selectbox("Kategoria produktu", options=list(cat_options.keys()))
+    p_nazwa = st.text_input("Nazwa produktu")
+    p_liczba = st.number_input("Liczba (szt.)", min_value=0, step=1)
+    p_ocena = st.number_input("Ocena", min_value=0.0, max_value=5.0, step=0.1)
+    p_cat_name = st.selectbox("Kategoria", list(categories_dict.keys()))
     
     if st.button("Dodaj Produkt"):
-        payload = {
-            "name": p_name,
-            "price": p_price,
-            "category_id": cat_options[p_cat]
+        new_prod = {
+            "nazwa": p_nazwa,
+            "liczba": p_liczba,
+            "ocena": p_ocena,
+            "kategoria_id": categories_dict[p_cat_name]
         }
-        conn.table("products").insert(payload).execute()
+        conn.table("produkty").insert(new_prod).execute()
         st.success("Produkt dodany!")
         st.rerun()
 
 with p_col2:
-    st.subheader("Lista i Usuwanie Produktów")
-    products = conn.table("products").select("id, name, price, categories(name)").execute()
+    st.subheader("Aktualny Inwentarz")
+    # Pobieranie produktów z joinem do kategorii
+    prods = conn.table("produkty").select("id, nazwa, liczba, ocena, kategorie(nazwa)").execute()
     
-    for p in products.data:
-        col_p1, col_p2 = st.columns([3, 1])
-        col_p1.write(f"**{p['name']}** - {p['price']} PLN ({p['categories']['name']})")
-        if col_p2.button("Usuń", key=f"del_{p['id']}"):
-            conn.table("products").delete().eq("id", p['id']).execute()
-            st.rerun()
+    if prods.data:
+        for p in prods.data:
+            col_a, col_b, col_c = st.columns([3, 1, 1])
+            col_a.write(f"**{p['nazwa']}** ({p['kategorie']['nazwa']}) | Ilość: {p['liczba']} | ⭐ {p['ocena']}")
+            if col_c.button("Usuń", key=f"p_{p['id']}"):
+                conn.table("produkty").delete().eq("id", p['id']).execute()
+                st.rerun()
+    else:
+        st.info("Brak produktów w bazie.")
