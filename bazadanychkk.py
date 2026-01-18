@@ -1,77 +1,85 @@
 import streamlit as st
-from st_supabase_connection import SupabaseConnection
+from supabase import create_client, Client
+import pandas as pd
 
-st.set_page_config(page_title="Magazyn Supabase", layout="wide")
+# Konfiguracja połączenia z Supabase
+url = st.secrets["SUPABASE_URL"]
+key = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
 
-# Inicjalizacja połączenia
-conn = st.connection("supabase", type=SupabaseConnection)
+st.title("Zarządzanie Sklepem 🛒")
 
-st.title("📊 Zarządzanie Bazą Danych (Supabase)")
+# Funkcje pomocnicze
+def get_data(table_name):
+    return supabase.table(table_name).select("*").execute()
 
-# Pobieranie danych do list wyboru
-def get_categories():
-    res = conn.table("kategorie").select("id, nazwa").execute()
-    return {c['nazwa']: c['id'] for c in res.data}
+# --- ZAKŁADKI ---
+tab1, tab2 = st.tabs(["Produkty", "Kategorie"])
 
-categories_dict = get_categories()
+# --- SEKCJA: KATEGORIE ---
+with tab2:
+    st.header("Zarządzanie Kategoriami")
+    
+    # Dodawanie kategorii
+    with st.expander("Dodaj nową kategorię"):
+        with st.form("add_category"):
+            kat_nazwa = st.text_input("Nazwa kategorii")
+            kat_opis = st.text_area("Opis")
+            submit_kat = st.form_submit_button("Zapisz kategorię")
+            
+            if submit_kat and kat_nazwa:
+                supabase.table("kategorie").insert({"nazwa": kat_nazwa, "opis": kat_opis}).execute()
+                st.success("Dodano kategorię!")
+                st.rerun()
 
-# --- SEKCJA KATEGORII ---
-st.header("📂 Kategorie")
-c_col1, c_col2 = st.columns(2)
-
-with c_col1:
-    with st.expander("➕ Dodaj nową kategorię"):
-        c_nazwa = st.text_input("Nazwa kategorii")
-        c_opis = st.text_area("Opis kategorii")
-        if st.button("Zapisz kategorię"):
-            conn.table("kategorie").insert({"nazwa": c_nazwa, "opis": c_opis}).execute()
-            st.success("Dodano kategorię!")
+    # Wyświetlanie i usuwanie kategorii
+    kategorie_data = get_data("kategorie")
+    if kategorie_data.data:
+        df_kat = pd.DataFrame(kategorie_data.data)
+        st.table(df_kat)
+        
+        kat_to_delete = st.selectbox("Wybierz kategorię do usunięcia", options=df_kat['id'].tolist(), format_func=lambda x: df_kat[df_kat['id']==x]['nazwa'].values[0])
+        if st.button("Usuń kategorię"):
+            supabase.table("kategorie").delete().eq("id", kat_to_delete).execute()
+            st.warning(f"Usunięto kategorię ID: {kat_to_delete}")
             st.rerun()
 
-with c_col2:
-    with st.expander("🗑️ Usuń kategorię"):
-        if categories_dict:
-            cat_to_del = st.selectbox("Wybierz kategorię", list(categories_dict.keys()), key="del_cat")
-            if st.button("Usuń kategorię i jej produkty", type="primary"):
-                conn.table("kategorie").delete().eq("id", categories_dict[cat_to_del]).execute()
-                st.warning("Usunięto pomyślnie!")
-                st.rerun()
+# --- SEKCJA: PRODUKTY ---
+with tab1:
+    st.header("Zarządzanie Produktami")
 
-st.divider()
-
-# --- SEKCJA PRODUKTÓW ---
-st.header("🛒 Produkty")
-p_col1, p_col2 = st.columns([1, 2])
-
-with p_col1:
-    st.subheader("Dodaj Produkt")
-    p_nazwa = st.text_input("Nazwa produktu")
-    p_liczba = st.number_input("Liczba (szt.)", min_value=0, step=1)
-    p_ocena = st.number_input("Ocena", min_value=0.0, max_value=5.0, step=0.1)
-    p_cat_name = st.selectbox("Kategoria", list(categories_dict.keys()))
-    
-    if st.button("Dodaj Produkt"):
-        new_prod = {
-            "nazwa": p_nazwa,
-            "liczba": p_liczba,
-            "ocena": p_ocena,
-            "kategoria_id": categories_dict[p_cat_name]
-        }
-        conn.table("produkty").insert(new_prod).execute()
-        st.success("Produkt dodany!")
-        st.rerun()
-
-with p_col2:
-    st.subheader("Aktualny Inwentarz")
-    # Pobieranie produktów z joinem do kategorii
-    prods = conn.table("produkty").select("id, nazwa, liczba, ocena, kategorie(nazwa)").execute()
-    
-    if prods.data:
-        for p in prods.data:
-            col_a, col_b, col_c = st.columns([3, 1, 1])
-            col_a.write(f"**{p['nazwa']}** ({p['kategorie']['nazwa']}) | Ilość: {p['liczba']} | ⭐ {p['ocena']}")
-            if col_c.button("Usuń", key=f"p_{p['id']}"):
-                conn.table("produkty").delete().eq("id", p['id']).execute()
-                st.rerun()
+    # Dodawanie produktu
+    if kategorie_data.data:
+        kat_options = {item['nazwa']: item['id'] for item in kategorie_data.data}
+        
+        with st.expander("Dodaj nowy produkt"):
+            with st.form("add_product"):
+                p_nazwa = st.text_input("Nazwa produktu")
+                p_liczba = st.number_input("Liczba (szt.)", min_value=0, step=1)
+                p_ocena = st.number_input("Ocena", min_value=0.0, max_value=5.0, step=0.1)
+                p_kat_nazwa = st.selectbox("Kategoria", options=list(kat_options.keys()))
+                submit_p = st.form_submit_button("Zapisz produkt")
+                
+                if submit_p and p_nazwa:
+                    supabase.table("produkty").insert({
+                        "nazwa": p_nazwa,
+                        "liczba": p_liczba,
+                        "ocena": p_ocena,
+                        "kategoria_id": kat_options[p_kat_nazwa]
+                    }).execute()
+                    st.success("Dodano produkt!")
+                    st.rerun()
     else:
-        st.info("Brak produktów w bazie.")
+        st.warning("Najpierw dodaj kategorię, aby móc przypisać do niej produkty.")
+
+    # Wyświetlanie i usuwanie produktów
+    produkty_data = get_data("produkty")
+    if produkty_data.data:
+        df_prod = pd.DataFrame(produkty_data.data)
+        st.dataframe(df_prod)
+        
+        prod_to_delete = st.selectbox("Wybierz produkt do usunięcia", options=df_prod['id'].tolist(), format_func=lambda x: df_prod[df_prod['id']==x]['nazwa'].values[0])
+        if st.button("Usuń produkt"):
+            supabase.table("produkty").delete().eq("id", prod_to_delete).execute()
+            st.warning(f"Usunięto produkt ID: {prod_to_delete}")
+            st.rerun()
