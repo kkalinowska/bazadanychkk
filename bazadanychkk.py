@@ -1,85 +1,46 @@
-import streamlit as st
-from supabase import create_client, Client
-import pandas as pd
+-- Usuwamy stare tabele, aby uniknąć konfliktów (kolejność ma znaczenie!)
+SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS users;
+SET FOREIGN_KEY_CHECKS = 1;
 
-# Konfiguracja połączenia z Supabase
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(url, key)
+-- 1. Tworzymy tabelę użytkowników
+CREATE TABLE users (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-st.title("Zarządzanie Sklepem 🛒")
-
-# Funkcje pomocnicze
-def get_data(table_name):
-    return supabase.table(table_name).select("*").execute()
-
-# --- ZAKŁADKI ---
-tab1, tab2 = st.tabs(["Produkty", "Kategorie"])
-
-# --- SEKCJA: KATEGORIE ---
-with tab2:
-    st.header("Zarządzanie Kategoriami")
+-- 2. Tworzymy tabelę zadań (z automatycznym śledzeniem czasu)
+CREATE TABLE tasks (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    title VARCHAR(150) NOT NULL,
+    description TEXT,
+    status ENUM('todo', 'doing', 'done') DEFAULT 'todo',
+    priority ENUM('low', 'medium', 'high') DEFAULT 'medium',
+    due_date DATE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
-    # Dodawanie kategorii
-    with st.expander("Dodaj nową kategorię"):
-        with st.form("add_category"):
-            kat_nazwa = st.text_input("Nazwa kategorii")
-            kat_opis = st.text_area("Opis")
-            submit_kat = st.form_submit_button("Zapisz kategorię")
-            
-            if submit_kat and kat_nazwa:
-                supabase.table("kategorie").insert({"nazwa": kat_nazwa, "opis": kat_opis}).execute()
-                st.success("Dodano kategorię!")
-                st.rerun()
+    -- Relacja: jeśli usuniesz użytkownika, jego zadania zostaną usunięte automatycznie
+    CONSTRAINT fk_tasks_user FOREIGN KEY (user_id) 
+        REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    # Wyświetlanie i usuwanie kategorii
-    kategorie_data = get_data("kategorie")
-    if kategorie_data.data:
-        df_kat = pd.DataFrame(kategorie_data.data)
-        st.table(df_kat)
-        
-        kat_to_delete = st.selectbox("Wybierz kategorię do usunięcia", options=df_kat['id'].tolist(), format_func=lambda x: df_kat[df_kat['id']==x]['nazwa'].values[0])
-        if st.button("Usuń kategorię"):
-            supabase.table("kategorie").delete().eq("id", kat_to_delete).execute()
-            st.warning(f"Usunięto kategorię ID: {kat_to_delete}")
-            st.rerun()
+-- 3. Dodajemy szybkie indeksy (przyspieszają filtrowanie)
+CREATE INDEX idx_task_status ON tasks(status);
+CREATE INDEX idx_task_user ON tasks(user_id);
 
-# --- SEKCJA: PRODUKTY ---
-with tab1:
-    st.header("Zarządzanie Produktami")
+-- 4. Wstawiamy dane testowe, żebyś od razu widział, że działa
+INSERT INTO users (username, email, password_hash) VALUES 
+('admin', 'admin@example.com', '$2y$10$89AbC...'), 
+('user1', 'user1@example.com', '$2y$10$90XyZ...');
 
-    # Dodawanie produktu
-    if kategorie_data.data:
-        kat_options = {item['nazwa']: item['id'] for item in kategorie_data.data}
-        
-        with st.expander("Dodaj nowy produkt"):
-            with st.form("add_product"):
-                p_nazwa = st.text_input("Nazwa produktu")
-                p_liczba = st.number_input("Liczba (szt.)", min_value=0, step=1)
-                p_ocena = st.number_input("Ocena", min_value=0.0, max_value=5.0, step=0.1)
-                p_kat_nazwa = st.selectbox("Kategoria", options=list(kat_options.keys()))
-                submit_p = st.form_submit_button("Zapisz produkt")
-                
-                if submit_p and p_nazwa:
-                    supabase.table("produkty").insert({
-                        "nazwa": p_nazwa,
-                        "liczba": p_liczba,
-                        "ocena": p_ocena,
-                        "kategoria_id": kat_options[p_kat_nazwa]
-                    }).execute()
-                    st.success("Dodano produkt!")
-                    st.rerun()
-    else:
-        st.warning("Najpierw dodaj kategorię, aby móc przypisać do niej produkty.")
-
-    # Wyświetlanie i usuwanie produktów
-    produkty_data = get_data("produkty")
-    if produkty_data.data:
-        df_prod = pd.DataFrame(produkty_data.data)
-        st.dataframe(df_prod)
-        
-        prod_to_delete = st.selectbox("Wybierz produkt do usunięcia", options=df_prod['id'].tolist(), format_func=lambda x: df_prod[df_prod['id']==x]['nazwa'].values[0])
-        if st.button("Usuń produkt"):
-            supabase.table("produkty").delete().eq("id", prod_to_delete).execute()
-            st.warning(f"Usunięto produkt ID: {prod_to_delete}")
-            st.rerun()
+INSERT INTO tasks (user_id, title, description, status, priority) VALUES 
+(1, 'Konfiguracja bazy', 'Baza została poprawnie ulepszona', 'done', 'high'),
+(1, 'Test wydajności', 'Sprawdzenie czy indeksy działają', 'todo', 'medium'),
+(2, 'Pierwsze logowanie', 'Sprawdzić czy user1 może wejść', 'doing', 'low');
