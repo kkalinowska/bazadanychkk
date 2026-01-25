@@ -1,45 +1,71 @@
+import streamlit as st
+from supabase import create_client, Client
+import pandas as pd
+import io  # Kluczowe do generowania plików
+
+# 1. Połączenie
+@st.cache_resource
+def init_connection():
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Błąd połączenia z bazą: {e}")
+        return None
+
+supabase = init_connection()
+
+# 2. Funkcja pobierania danych
+def get_data(table_name):
+    try:
+        if table_name == "produkty":
+            # Join z kategoriami, aby mieć nazwy zamiast ID
+            return supabase.table("produkty").select("*, kategorie(nazwa)").execute()
+        return supabase.table(table_name).select("*").execute()
+    except Exception as e:
+        st.error(f"Błąd pobierania danych ({table_name}): {e}")
+        return None
+
+# Pobieranie danych na start
+kategorie_res = get_data("kategorie")
+kategorie_list = kategorie_res.data if kategorie_res else []
+
+st.title("Zarządzanie Sklepem 🛒")
 tab1, tab2, tab3 = st.tabs(["📦 Produkty", "📂 Kategorie", "📊 Statystyki"])
 
-# --- SEKCJA: STATYSTYKI ---
+# --- SEKCJA PRODUKTY (tab1) i KATEGORIE (tab2) pozostają podobne jak wcześniej ---
+# (Pominąłem dla czytelności, skupiając się na błędzie w statystykach)
+
+with tab2:
+    st.header("Kategorie")
+    if kategorie_list:
+        st.dataframe(pd.DataFrame(kategorie_list), use_container_width=True)
+
+with tab1:
+    st.header("Produkty")
+    produkty_res = get_data("produkty")
+    if produkty_res and produkty_res.data:
+        df_p = pd.DataFrame(produkty_res.data)
+        st.dataframe(df_p, use_container_width=True)
+
+# --- SEKCJA: STATYSTYKI I EXCEL (Tu najczęściej występuje błąd) ---
 with tab3:
-    st.header("Analityka i Eksport")
+    st.header("Stan Magazynowy i Eksport")
     
-    # Pobieramy aktualne dane
-    prod_data = get_data("produkty").data
-    if prod_data:
-        df_stat = pd.DataFrame(prod_data)
+    prod_res = get_data("produkty")
+    if prod_res and prod_res.data:
+        df_stat = pd.DataFrame(prod_res.data)
         
-        # Przetwarzanie nazwy kategorii dla czytelności
+        # 1. Czyszczenie danych (naprawa nazw kategorii)
         if 'kategorie' in df_stat.columns:
-            df_stat['kategoria'] = df_stat['kategorie'].apply(lambda x: x.get('nazwa') if isinstance(x, dict) else 'Brak')
-
-        # --- WIZUALIZACJA STANU ---
-        st.subheader("Stan magazynowy (TOP 10)")
-        # Wykres słupkowy ilości produktów
-        st.bar_chart(df_stat.set_index('nazwa')['liczba'])
-
-        # --- GENEROWANIE EXCELA ---
-        st.subheader("Eksport danych")
+            df_stat['kategoria'] = df_stat['kategorie'].apply(lambda x: x.get('nazwa') if isinstance(x, dict) else "Brak")
         
-        # Przygotowanie bufora dla pliku Excel
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            # Wybieramy tylko istotne kolumny do raportu
-            df_to_export = df_stat[['id', 'nazwa', 'liczba', 'ocena', 'kategoria']]
-            df_to_export.to_excel(writer, index=False, sheet_name='Stan Magazynowy')
-            
-        st.download_button(
-            label="📥 Pobierz raport Excel",
-            data=buffer.getvalue(),
-            file_name="raport_magazynowy.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-        # --- PODSUMOWANIE METRYK ---
-        st.divider()
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Suma produktów", df_stat['liczba'].sum())
-        m2.metric("Liczba pozycji", len(df_stat))
-        m3.metric("Średnia ocena", round(df_stat['ocena'].mean(), 2))
-    else:
-        st.info("Brak danych do wygenerowania statystyk.")
+        # 2. Wizualizacja stanu
+        st.subheader("Wykres ilości towaru")
+        st.bar_chart(data=df_stat, x="nazwa", y="liczba")
+
+        # 3. Alerty niskiego stanu
+        niskie_stany = df_stat[df_stat['liczba'] < 5]
+        if not niskie_stany.empty:
+            st.warning(f"⚠️ Uwaga! {len(n
