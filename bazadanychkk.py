@@ -6,7 +6,7 @@ import plotly.express as px
 # --- 1. KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Magazyn Pro", layout="wide")
 
-# --- 2. POŁĄCZENIE Z SUPABASE ---
+# --- 2. POLACZENIE Z SUPABASE ---
 @st.cache_resource
 def init_connection():
     try:
@@ -14,7 +14,7 @@ def init_connection():
         key = st.secrets["SUPABASE_KEY"]
         return create_client(url, key)
     except Exception as e:
-        st.error("Błąd połączenia. Sprawdź plik secrets.toml")
+        st.error("Blad polaczenia. Sprawdz plik secrets.toml")
         st.stop()
 
 supabase = init_connection()
@@ -23,19 +23,17 @@ supabase = init_connection()
 @st.cache_data(ttl=600)
 def fetch_data():
     try:
-        # Pobieranie produktów z joinem kategorii
         p_res = supabase.table("produkty").select("*, kategorie(nazwa)").execute()
         k_res = supabase.table("kategorie").select("*").execute()
         return p_res.data, k_res.data
     except Exception as e:
-        st.error(f"Błąd bazy danych: {e}")
+        st.error(f"Blad bazy danych: {e}")
         return [], []
 
 def refresh():
     st.cache_data.clear()
     st.rerun()
 
-# Załadowanie danych do DataFrame
 prod_raw, kat_raw = fetch_data()
 df_p = pd.DataFrame(prod_raw)
 df_k = pd.DataFrame(kat_raw)
@@ -45,40 +43,36 @@ total_val = 0
 low_stock_count = 0
 
 if not df_p.empty:
-    # Przygotowanie czytelnej nazwy kategorii
     if 'kategorie' in df_p.columns:
         df_p['kategoria_nazwa'] = df_p['kategorie'].apply(lambda x: x['nazwa'] if isinstance(x, dict) else "Brak")
     
-    # Obliczenia
     df_p['wartosc_laczna'] = df_p['cena'] * df_p['liczba']
     total_val = df_p['wartosc_laczna'].sum()
     low_stock_df = df_p[df_p['liczba'] <= df_p['stan_minimalny']]
     low_stock_count = len(low_stock_df)
 
-# --- 5. INTERFEJS UŻYTKOWNIKA ---
-st.title("Zarządzanie Sklepem i Magazynem")
+# --- 5. INTERFEJS UZYTKOWNIKA ---
+st.title("Zarzadzanie Magazynem")
 
-# Definicja zakładek (poprawiona linia, która generowała błąd)
 t1, t2, t3 = st.tabs(["Magazyn", "Raporty", "Kategorie"])
 
-# --- ZAKŁADKA 1: MAGAZYN ---
+# --- TAB 1: MAGAZYN ---
 with t1:
     col_a, col_b = st.columns([1, 3])
     
     with col_a:
         st.subheader("Status")
-        st.metric("Wartość towaru", f"{total_val:,.2f} PLN")
+        st.metric("Wartosc towaru", f"{total_val:,.2f} PLN")
         st.metric("Niskie stany", low_stock_count)
         
         if low_stock_count > 0:
-            st.warning("Produkty do dokupienia:")
+            st.warning("Braki:")
             for _, r in low_stock_df.iterrows():
                 st.caption(f"- {r['nazwa']} (szt: {r['liczba']})")
 
     with col_b:
-        st.subheader("Lista i szybka edycja")
+        st.subheader("Lista produktow")
         if not df_p.empty:
-            # Edytor tabeli
             edited = st.data_editor(
                 df_p[['id', 'nazwa', 'kategoria_nazwa', 'cena', 'liczba', 'stan_minimalny']],
                 use_container_width=True,
@@ -96,7 +90,51 @@ with t1:
                 st.success("Zaktualizowano dane!")
                 refresh()
         
-        with st.expander("Dodaj nowy produkt"):
+        with st.expander("Dodaj produkt"):
             if not df_k.empty:
                 k_map = {row['nazwa']: row['id'] for _, row in df_k.iterrows()}
-                with st.form("add
+                with st.form("form_add_prod"):
+                    n = st.text_input("Nazwa")
+                    kat = st.selectbox("Kategoria", options=list(k_map.keys()))
+                    c1, c2 = st.columns(2)
+                    pr = c1.number_input("Cena", min_value=0.0)
+                    qt = c2.number_input("Ilosc", min_value=0)
+                    if st.form_submit_button("Zapisz produkt"):
+                        if n:
+                            supabase.table("produkty").insert({
+                                "nazwa": n, "kategoria_id": k_map[kat],
+                                "cena": pr, "liczba": qt, "stan_minimalny": 5
+                            }).execute()
+                            refresh()
+            else:
+                st.info("Brak kategorii w bazie.")
+
+# --- TAB 2: RAPORTY ---
+with t2:
+    if not df_p.empty:
+        st.subheader("Analiza")
+        fig = px.pie(df_p, values='wartosc_laczna', names='kategoria_nazwa', title="Wartosc wg kategorii")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.write("Brak danych.")
+
+# --- TAB 3: KATEGORIE ---
+with t3:
+    st.subheader("Kategorie")
+    with st.form("form_add_cat"):
+        new_c = st.text_input("Nowa kategoria")
+        if st.form_submit_button("Dodaj"):
+            if new_c:
+                supabase.table("kategorie").insert({"nazwa": new_c}).execute()
+                refresh()
+    
+    if not df_k.empty:
+        st.dataframe(df_k[['nazwa']], use_container_width=True)
+
+# --- SIDEBAR (USUWANIE) ---
+st.sidebar.title("Opcje")
+if not df_p.empty:
+    p_del = st.sidebar.selectbox("Usun produkt", options=prod_raw, format_func=lambda x: x['nazwa'])
+    if st.sidebar.button("Potwierdz usuniecie"):
+        supabase.table("produkty").delete().eq("id", p_del['id']).execute()
+        refresh()
